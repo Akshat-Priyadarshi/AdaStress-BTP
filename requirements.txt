@@ -1,0 +1,14 @@
+# numpy must stay below 2: torch, pandas and scipy here were built
+# against 1.x and all three break together if it is upgraded
+numpy<2
+pandas>=2.0
+scipy>=1.10
+scikit-learn>=1.2
+joblib>=1.2
+torch>=2.0
+tqdm>=4.64
+pyyaml>=6.0
+matplotlib>=3.6
+boto3>=1.26
+fastavro>=1.8
+openpyxl>=3.1

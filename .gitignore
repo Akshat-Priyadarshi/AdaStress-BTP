@@ -1,0 +1,10 @@
+data/
+runs/
+mentor_files/
+*.xlsx
+*.avro
+*.pkl
+!checkpoints/**/*.pkl
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

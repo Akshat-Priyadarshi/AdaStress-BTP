@@ -266,6 +266,58 @@ logged by hand:
 
 Deriving them ourselves gave **91% coverage** against their 20%.
 
+#### The twelve context columns
+
+| context | where it comes from | how |
+|---|---|---|
+| `PR` | heartbeat timestamps | 60 / gap between beats, averaged per window. Only 40-180 bpm kept |
+| `RESP` | heartbeat timestamps | breathing hides in the heart rhythm: the gap between beats shortens on the in-breath. Band-pass the gaps to 0.1-0.5 Hz, count the peaks |
+| `ACT_COUNT` | accelerometer, 64 Hz | ActiGraph-style counts: band-pass 0.25-2.5 Hz, rectify, sum |
+| `ACT_INT` | accelerometer | ENMO, then Hildebrand wrist cut-points: sedentary / light / moderate / vigorous |
+| `MET` | accelerometer | ENMO through a metabolic-equivalent regression |
+| `EDA_TONIC` | EDA, 4 Hz | the slow baseline, a rolling median over 30 s |
+| `EDA_PHASIC_N` | EDA, 4 Hz | count of fast spikes once the baseline is removed. These are the arousal responses |
+| `POSTURE` | accelerometer | sitting / standing / walking, from where gravity points plus how much the wrist moved |
+| `TILT` | accelerometer | angle of the forearm away from vertical |
+| `SKIN_TEMP` | temperature, 1 Hz | mean per window |
+| `HOUR` | timestamp | 0-23, local time |
+| `IS_WEEKEND` | timestamp | Saturday or Sunday |
+
+The first five are ported from the study team's notebook with their
+citations. The rest are marked `BTP-ADDED` in the source, each with the
+measurement that made it necessary.
+
+Everything lands on a **30-second grid**, matching the window stride, so each
+window gets exactly two context values and nothing has to be stretched.
+
+#### Five more were derived and then dropped
+
+Measured, found redundant or unusable, and removed. Listed because the
+measurements are the useful part:
+
+| dropped | why |
+|---|---|
+| `MOVE_SD` | 0.97 with `ACT_COUNT` — the same thing twice |
+| `PRV_SDNN` | 0.91 with `PRV_RMSSD` |
+| `EDA_PHASIC_AMP` | 0.98 with `EDA_PHASIC_N` |
+| `PRV_RMSSD` | **unusable.** Consecutive beat intervals jump by a median of 122 ms and a quarter jump over 300 ms, where a resting adult is 20-50 ms. Computed two different ways and both gave ~280 ms, so it is the beat timings and not the arithmetic |
+| `AROUSAL_AT_REST` | pulse with the movement-explained part removed. Meant to catch a racing heart while the body is still, the one thing a context gate exists for. As a ratio it came out at -0.92 with movement; as a residual, 0.90 with pulse. Either way it was something we already had |
+
+#### What WESAD's context looks like by comparison
+
+WESAD ships none. All four are computed during preprocessing:
+
+| context | how | kept? |
+|---|---|---|
+| `Task` | which of the five lab sessions was running | **leaks the label at 1.000** |
+| `SessionPhase` | first 30% / middle 40% / last 30% of a session | dropped, scored exactly at guessing |
+| `Activity` | chest movement against that subject's own mean | kept, also at guessing |
+| `Posture` | chest movement against fixed cut-offs | changed to per-dataset thirds; WESAD's 0.85 and 1.05 g are chest-strap values and meaningless on a wrist |
+
+Our users have no equivalent of `Task` or `SessionPhase` — they were living
+normally, not working through a protocol. That is why the context had to be
+rebuilt from signals rather than carried over.
+
 **`33`** lists what exists per person and whether the raw folder is safe to
 delete. Worth running: we once deleted 35 GB after deriving context, without
 noticing the signal channels had not been built, and had to download it all

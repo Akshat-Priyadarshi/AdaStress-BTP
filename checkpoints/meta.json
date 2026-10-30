@@ -1,0 +1,17 @@
+{
+  "columns": [
+    "ACC_X_wrist",
+    "ACC_Y_wrist",
+    "ACC_Z_wrist",
+    "BVP",
+    "EDA_wrist",
+    "Temp_wrist",
+    "RESP"
+  ],
+  "window_sec": 60,
+  "stride_sec": 30,
+  "fs": 1,
+  "window_size": 60,
+  "input_channels": 7,
+  "embed_dim": 256
+}

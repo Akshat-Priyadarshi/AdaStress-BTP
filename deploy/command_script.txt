@@ -1,0 +1,46 @@
+cd ~/Downloads/demo_testing
+pip install -r requirements.txt
+python3 52_inference_demo.py --sample sample_data/user25_2026-09-16 \
+    --out demo_prediction.csv
+
+
+
+
+cd ~/Downloads/demo_testing
+
+python3 53_power_measure.py --source tegrastats \
+    --cmd "python3 52_inference_demo.py --sample sample_data/user25_2026-09-16 --limit 300" \
+    --idle-seconds 60 --windows 300 --voltage 5.0
+
+
+
+
+
+
+
+
+
+
+24b_download_remaining_users.ipynb
+
+25_build_user_6ch.py
+
+26_apply_to_users.py
+
+27_derive_pr.py
+
+27_merge_biomarkers.py
+
+30_derive_context.py
+
+31_build_labels.py
+
+32_user_leak_check.py
+
+33_check_outputs.py
+
+42_build_context8.py
+
+34_train_users.py
+
+40_build_user_7ch.py

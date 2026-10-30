@@ -1,0 +1,1 @@
+It contains information of my deployment in the jetson-orni nano

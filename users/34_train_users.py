@@ -109,7 +109,8 @@ NOT_CONTEXT = {"Subject_ID", "datetime_utc", "datetime_ist", "date",
 TIME_COL = "datetime_ist"
 
 
-def load_windows(labelled_path, signal_dir, signal_cols, window, context_cols):
+def load_windows(labelled_path, signal_dir, signal_cols, window, context_cols,
+                 suffix=""):
     """Pair each labelled window with the 60 seconds of signal beneath it.
 
     The labelled file says when a window is and what the person reported.
@@ -123,7 +124,7 @@ def load_windows(labelled_path, signal_dir, signal_cols, window, context_cols):
     Xs, Cs, ys, subs, times, resp = [], [], [], [], [], []
 
     for user, g in lab.groupby("Subject_ID", sort=True):
-        spath = os.path.join(signal_dir, "%s.csv" % user)
+        spath = os.path.join(signal_dir, "%s%s.csv" % (user, suffix))
         if not os.path.exists(spath):
             print("  %-8s no signal file, skipped" % user)
             continue
@@ -178,11 +179,17 @@ def build_context(C_train, C_all, context_cols):
     Fitting on training users only matters: fitting on everything would let
     the held-out person's own statistics influence the scaling, which is a
     quiet way of leaking.
+
+    Returns the fitted transformers alongside the numbers. They have to be
+    kept, because a saved model cannot be used on new data without them:
+    there would be no way to turn "sitting" into the same column the gate
+    was trained to read.
     """
     num = [c for c in context_cols
            if pd.api.types.is_numeric_dtype(C_all[c])]
     cat = [c for c in context_cols if c not in num]
 
+    sc = oh = None
     pieces_all = []
     if num:
         sc = StandardScaler().fit(C_train[num].fillna(0.0))
@@ -192,7 +199,9 @@ def build_context(C_train, C_all, context_cols):
         oh.fit(C_train[cat].astype(str))
         pieces_all.append(oh.transform(C_all[cat].astype(str)))
 
-    return np.concatenate(pieces_all, axis=1).astype(np.float32)
+    out = np.concatenate(pieces_all, axis=1).astype(np.float32)
+    return out, {"numeric_cols": num, "categorical_cols": cat,
+                 "scaler": sc, "onehot": oh}
 
 
 def make_folds(args, subs, resp, n, users):
@@ -260,6 +269,16 @@ def main():
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--labelled", default=LABELLED)
     ap.add_argument("--signal-dir", default=SIGNAL_DIR)
+    ap.add_argument("--signal-suffix", default="",
+                    help="added to the user name when looking for the signal "
+                         "file. Default looks for <user>.csv; pass _dequant "
+                         "for the Chronos-normalised files written by "
+                         "btp/35_tokenise_1hz.py.")
+    ap.add_argument("--no-scaler", action="store_true",
+                    help="skip the WESAD scaler. Use this with the Chronos "
+                         "files, which are already normalised per window: "
+                         "scaling them again would undo the thing being "
+                         "tested.")
     ap.add_argument("--context", choices=["on", "off"], default="on")
     ap.add_argument("--split", choices=["user", "random", "response"],
                     default="user",
@@ -276,6 +295,13 @@ def main():
     ap.add_argument("--epochs", type=int, default=None,
                     help="default comes from the config")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--save-model", action="store_true",
+                    help="write model.pth for the first fold, so it can be "
+                         "used for inference or for measuring what each "
+                         "context column contributes. Only the first fold "
+                         "is kept: the others differ only in which rows they "
+                         "trained on, and a single file is what a deployed "
+                         "system would carry.")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -318,7 +344,8 @@ def main():
     print("pairing labelled windows with signal:")
     X, y, C, subs, times, resp = load_windows(args.labelled, args.signal_dir,
                                               signal_cols, window,
-                                              context_cols)
+                                              context_cols,
+                                              args.signal_suffix)
     users = sorted(set(subs))
     print()
     print("windows: %s   users: %s" % (X.shape, ", ".join(users)))
@@ -326,16 +353,31 @@ def main():
                        for c in sorted(set(y))})
     print()
 
-    # the repo's own scaler, fitted on WESAD, so the encoder sees the same
-    # kind of numbers it was trained on
-    scaler = joblib.load(cfg.paths.scaler_ckpt)
-    flat = X.transpose(0, 2, 1).reshape(-1, X.shape[1])
-    X = scaler.transform(flat).reshape(X.shape[0], X.shape[2],
-                                       X.shape[1]).transpose(0, 2, 1)
-    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+    # The repo's own scaler, fitted on WESAD, so the encoder sees the same
+    # kind of numbers it was trained on.
+    #
+    # Skipped for the Chronos files, which are already centred and scaled
+    # within each window. Scaling those again would undo the very thing the
+    # experiment is testing.
+    if args.no_scaler:
+        print("WESAD scaler skipped: the input is already normalised per")
+        print("window, which is what this run is testing.")
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0,
+                          neginf=0.0).astype(np.float32)
+    else:
+        scaler = joblib.load(cfg.paths.scaler_ckpt)
+        flat = X.transpose(0, 2, 1).reshape(-1, X.shape[1])
+        X = scaler.transform(flat).reshape(X.shape[0], X.shape[2],
+                                           X.shape[1]).transpose(0, 2, 1)
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0,
+                          neginf=0.0).astype(np.float32)
+    print("input after scaling: mean %.3f, sd %.3f, range %.1f to %.1f"
+          % (X.mean(), X.std(), X.min(), X.max()))
+    print()
 
     classes = sorted(set(y))
     results = []
+    saved = False
 
     for held, tr, te in make_folds(args, subs, resp, len(y), users):
         if te.sum() < 10 or tr.sum() < 50:
@@ -346,11 +388,12 @@ def main():
 
         # context fitted on the training users only
         if context_cols:
-            Call = build_context(C[tr], C, context_cols)
+            Call, ctx_fitted = build_context(C[tr], C, context_cols)
             ctx_dim = Call.shape[1]
         else:
             Call = np.zeros((len(y), 1), dtype=np.float32)
             ctx_dim = 0
+            ctx_fitted = None
 
         # the number this fold has to beat
         lab, cnt = np.unique(y[tr], return_counts=True)
@@ -419,6 +462,42 @@ def main():
             print("            gate %.3f  (near 1 means it leaned on the body,"
                   " near 0 on context)" % gate_mean)
 
+        # Save the first fold, if asked. The bundle carries everything
+        # needed to rebuild the model elsewhere: the architecture's shape,
+        # the paths to the frozen encoder and its scaler, and the fitted
+        # context transformers, without which the gate cannot be fed.
+        #
+        # Keys match what btp/21_train_subjectwise.py writes, so
+        # btp/50_inference.py reads either without changes.
+        if args.save_model and not saved:
+            bundle = {
+                "classifier": clf.state_dict(),
+                "gate": gate.state_dict() if gate is not None else None,
+                "classes": classes,
+                "context_dim": int(ctx_dim),
+                "context_columns": context_cols,
+                "context_fitted": ctx_fitted,
+                "input_channels": int(X.shape[1]),
+                "signal_columns": signal_cols,
+                "encoder_ckpt": cfg.paths.encoder_ckpt,
+                "scaler_ckpt": cfg.paths.scaler_ckpt,
+                "wesad_scaler_applied": not args.no_scaler,
+                "lstm_hidden": cfg.ssl.lstm_hidden,
+                "window": int(window),
+                "stride": int(cfg.window.get("stride_sec", window // 2)
+                              * cfg.window.fs),
+                "seed": args.seed,
+                "trained_on": "user data, %s split, fold %s"
+                              % (args.split, held),
+                "labelled_file": args.labelled,
+                "signal_dir": args.signal_dir,
+            }
+            mpath = os.path.join(run_dir, "model.pth")
+            torch.save(bundle, mpath)
+            saved = True
+            print("            saved %s  (fold %s, %d context values)"
+                  % (mpath, held, ctx_dim))
+
         results.append({
             "fold": held, "n_test": int(te.sum()), "n_train": int(tr.sum()),
             "accuracy": acc, "balanced_accuracy": bal, "macro_f1": mf1,
@@ -470,6 +549,9 @@ def main():
                "context": args.context, "context_columns": context_cols,
                "split": args.split, "ratios": args.ratios,
                "seeds": args.seeds,
+               "signal_dir": args.signal_dir,
+               "signal_suffix": args.signal_suffix,
+               "wesad_scaler_applied": not args.no_scaler,
                "channels": signal_cols, "window": window, "epochs": epochs,
                "seed": args.seed,
                "mean_accuracy": float(np.mean(accs)),
@@ -477,6 +559,7 @@ def main():
                "mean_macro_f1": float(np.mean(f1s)),
                "mean_baseline": float(np.mean(base)),
                "accuracy_spread": float(max(accs) - min(accs)),
+               "model_saved": bool(args.save_model and saved),
                "per_fold": results},
               open(os.path.join(run_dir, "metrics.json"), "w"), indent=2)
     print("saved %s/metrics.json" % run_dir)

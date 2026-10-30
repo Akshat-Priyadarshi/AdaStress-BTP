@@ -1,0 +1,166 @@
+# =============================================================================
+# AdaStress configuration -- BTP run on real WESAD, 13 channels at 1 Hz
+#
+# This is a copy of the repository's own configs/config.yaml.
+#
+# ONLY the data paths and the checkpoint paths are changed. Every single
+# hyperparameter below is exactly as the repository ships it: 60 second
+# windows, stride 30, temperature 0.5, 128 LSTM hidden units, 20 epochs,
+# context gate on. Nothing about the model has been touched.
+#
+# What changed, and why:
+#
+#   unlabelled_csv / labelled_csv
+#       The repository points these at data/sample_data.csv, which its own
+#       comment describes as a smoke test. It is 999 rows, every value
+#       squashed between 0 and 1, and Task has 7 values where WESAD has 5
+#       sessions. It is not WESAD.
+#
+#       They now point at the real WESAD data, converted into the 13 columns
+#       this config asks for by btp/20_build_wesad_13ch.py.
+#
+#   paths.*
+#       Written into runs/ instead of checkpoints/, so each run keeps its own
+#       encoder and classifier and nothing is ever overwritten.
+#
+# HOW TO RUN, from the AdaStress_BTP folder:
+#
+#   python3 vendor/adastress/scripts/pretrain_encoder.py \
+#       --config configs/btp_13ch.yaml
+#
+#   python3 vendor/adastress/scripts/train_classifier.py \
+#       --config configs/btp_13ch.yaml --seed 42
+#
+# Both are the repository's own scripts, unmodified. The wrapper adds the
+# repo to the import path itself, so nothing needs to be copied and
+# vendor/adastress can stay read-only.
+# =============================================================================
+
+# VARIANT: WESAD's own condition labels instead of PANAS.
+#
+# These ship inside the .pkl and are what most WESAD papers classify:
+#   baseline -> 0,  amusement -> 1,  stress -> 2
+# Meditation and the transition markers are dropped, so it stays a
+# three class problem.
+#
+# Two things make these labels stronger than the PANAS ones: they mean
+# the same thing for every subject, and every second inside a condition
+# is labelled rather than eleven seconds around a questionnaire.
+#
+# Fewer rows than the other two, because meditation and transitions are
+# removed.
+#
+# Built by:
+#   python3 btp/20_build_wesad_13ch.py --mode corrected \
+#       --label-source wesad_condition
+
+# RUN W6: only the six channels the EmbracePlus wrist device also records.
+#
+# WESAD's 13 channels are chest plus wrist. EmbracePlus is wrist only, so
+# these six are all that exist in both:
+#
+#   ACC_X_wrist, ACC_Y_wrist, ACC_Z_wrist  <- accelerometer_x/y/z
+#   BVP                                     <- bvp
+#   EDA_wrist                               <- eda
+#   Temp_wrist                              <- temperature
+#
+# The other seven (chest ACC x/y/z, ECG, chest EDA, chest Temp, Resp) have
+# no equivalent. Padding them with zeros would be the same failure we
+# already measured on the context columns, except in the signal path where
+# there is no gate to learn around it.
+#
+# THIS is the model that gets fine-tuned on the users.
+
+# RUN W7: the six channels EmbracePlus records, plus a breathing rate.
+#
+# Seven and not thirteen because the other six WESAD channels come from a
+# chest strap (ECG, chest EDA, chest temperature, the respiration belt,
+# chest accelerometer) and a wristband has none of them.
+#
+# RESP is a rate in breaths per minute, not a waveform. On WESAD it is
+# computed from the chest belt, which is the accurate source and exists
+# there; on the users it is derived from the pulse, because a wristband
+# cannot measure breathing directly.
+#
+# That difference is deliberate but worth watching. The encoder learns its
+# filters from whatever it sees, so a clean belt-derived rate at training
+# time and a noisy pulse-derived one at test time are not quite the same
+# channel. Build the other version with --resp-source bvp and compare.
+#
+# What the derived version is worth, measured: across all fifteen WESAD
+# subjects it correlated with the belt at 0.185.
+#
+# Built by:
+#   python3 btp/39_build_wesad_7ch.py --mode corrected \
+#       --label-source wesad_condition
+
+seed: 42
+device: "auto"   # "auto" | "cpu" | "cuda"
+
+data:
+  # CHANGED: real WESAD instead of the bundled smoke-test file.
+  # Row and window counts are printed by the converter and written
+  # into docs/40_wesad_13ch_*.md
+  unlabelled_csv: "data/processed/wesad_7ch_corrected_wesad_condition/wesad_all.csv"
+  labelled_csv: "data/processed/wesad_7ch_corrected_wesad_condition/wesad_labelled.csv"
+
+  label_column: "Stress_Class"
+  subject_column: "Subject_ID"
+  context_columns: ["Task", "SessionPhase", "Activity"]
+  signal_columns:
+    - ACC_X_wrist
+    - ACC_Y_wrist
+    - ACC_Z_wrist
+    - BVP
+    - EDA_wrist
+    - Temp_wrist
+    - RESP
+
+window:
+  window_sec: 60
+  stride_sec: 30
+  fs: 1
+
+ssl:
+  batch_size: 128
+  epochs: 20
+  lr: 0.001
+  temperature: 0.5
+  proj_dim: 128
+  lstm_hidden: 128        # encoder output = 2 * lstm_hidden (bidirectional)
+
+classifier:
+  batch_size: 64
+  epochs: 20
+  lr: 0.001
+  dropout: 0.3
+  use_context_gate: true
+  context_embed_dim: 32
+
+drift:
+  num_bins: 20
+  history_window: 300
+  min_buffer_for_check: 15
+  check_every_n_windows: 5
+  smoothing_eps: 1.0e-6
+
+continual_learning:
+  method: "ewc"
+  ewc_lambda: 400.0
+  l2_lambda: 0.01
+  adapt_epochs: 5
+  adapt_lr: 1.0e-4
+  adapt_batch_size: 8
+  fisher_num_batches: 50
+
+paths:
+  # CHANGED: one folder per run, so nothing is overwritten.
+  checkpoints_dir: "runs/W7"
+  encoder_ckpt: "runs/W7/encoder.pth"
+  scaler_ckpt: "runs/W7/scaler.pkl"
+  meta_json: "runs/W7/meta.json"
+  classifier_ckpt: "runs/W7/classifier.pth"
+  fisher_ckpt: "runs/W7/fisher.pt"
+  theta_star_ckpt: "runs/W7/theta_star.pt"
+  drift_reference_ckpt: "runs/W7/drift_reference.pt"
+  results_dir: "runs/W7/results"

@@ -1,0 +1,27 @@
+read data/processed/labels/labelled_windows_ctx7.csv: 5119 rows
+biomarker minutes loaded: 70560 (rows where body position came from the right-wrist column: 0)
+
+COVERAGE OVER THE 5119 LABELLED WINDOWS (value present, not blank)
+            ACT_CLASS  BODY_POSITION  SLEEP   all
+Subject_ID                                       
+user17           0.78           0.78   0.78  0.78
+user18           0.71           0.71   0.71  0.71
+user25           0.91           0.91   0.91  0.91
+user26           0.91           0.90   0.91  0.90
+user27           0.98           0.98   0.98  0.98
+overall: 83% of labelled windows have ACT_CLASS
+
+VALUES
+ACT_CLASS: {'still': 2587, 'generic': 1258, nan: 853, 'walking': 421}
+BODY_POSITION: {'sitting_reclining_lying': 2764, 'standing': 1345, nan: 857, 'miscellaneous': 153}
+SLEEP: {0.0: 3993, nan: 853, 101.0: 160, 102.0: 113}
+
+IS A BLANK TELLING US THE LABEL? (windows with ACT_CLASS blank)
+LABEL_NAME  HighStress  LowStress  MediumStress   All
+_blank                                               
+False             1298       1768          1200  4266
+True               305        181           367   853
+All               1603       1949          1567  5119
+
+wrote data/processed/labels/labelled_windows_ctx8.csv: 5119 rows
+context columns (8): HOUR, IS_WEEKEND, POSTURE, ACT_COUNT, ACT_CLASS, BODY_POSITION, SLEEP, INDOOR_OUTDOOR
